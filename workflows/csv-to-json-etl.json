@@ -1,0 +1,127 @@
+{
+  "name": "CSV to JSON ETL Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 24 }]
+        }
+      },
+      "id": "trigger-node",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "notes": "Runs every 24 hours. Change interval as needed."
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "etl/trigger",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-node",
+      "name": "Webhook Trigger (Manual)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 460],
+      "notes": "Use this to trigger the pipeline manually via HTTP POST."
+    },
+    {
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv",
+        "options": {}
+      },
+      "id": "http-fetch-node",
+      "name": "Fetch CSV from URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "operation": "fromFile",
+        "options": {
+          "headerRow": true,
+          "delimiter": ","
+        }
+      },
+      "id": "csv-parse-node",
+      "name": "Parse CSV",
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRANSFORM STEP\n// Clean and enrich each row of data\nconst transformed = [];\n\nfor (const item of $input.all()) {\n  const row = item.json;\n\n  // Skip rows with missing critical fields\n  if (!row.PassengerId || !row.Survived) continue;\n\n  transformed.push({\n    json: {\n      id: parseInt(row.PassengerId),\n      survived: row.Survived === '1',\n      passenger_class: parseInt(row.Pclass) || null,\n      name: row.Name ? row.Name.trim() : 'Unknown',\n      gender: row.Sex ? row.Sex.toLowerCase() : null,\n      age: row.Age ? parseFloat(row.Age) : null,\n      fare: row.Fare ? parseFloat(row.Fare).toFixed(2) : null,\n      embarked_from: {\n        'C': 'Cherbourg',\n        'Q': 'Queenstown',\n        'S': 'Southampton'\n      }[row.Embarked] || 'Unknown',\n      family_size: (parseInt(row.SibSp) || 0) + (parseInt(row.Parch) || 0),\n      processed_at: new Date().toISOString()\n    }\n  });\n}\n\nreturn transformed;"
+      },
+      "id": "transform-node",
+      "name": "Transform & Clean Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// VALIDATION STEP\n// Filter out invalid records and tag valid ones\nconst valid = [];\nconst invalid = [];\n\nfor (const item of $input.all()) {\n  const d = item.json;\n  const errors = [];\n\n  if (d.id === null || isNaN(d.id)) errors.push('Missing ID');\n  if (d.passenger_class === null) errors.push('Missing class');\n  if (d.age !== null && (d.age < 0 || d.age > 120)) errors.push('Invalid age');\n\n  if (errors.length === 0) {\n    valid.push({ json: { ...d, status: 'valid' } });\n  } else {\n    invalid.push({ json: { ...d, status: 'invalid', errors } });\n  }\n}\n\n// Log summary\nconsole.log(`Valid: ${valid.length} | Invalid: ${invalid.length}`);\n\n// Return only valid records\nreturn valid;"
+      },
+      "id": "validate-node",
+      "name": "Validate Records",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// AGGREGATE STEP\n// Compute summary statistics\nconst items = $input.all();\nconst total = items.length;\nconst survived = items.filter(i => i.json.survived).length;\nconst avgAge = items\n  .filter(i => i.json.age !== null)\n  .reduce((sum, i) => sum + i.json.age, 0) / items.filter(i => i.json.age !== null).length;\n\nconst byClass = { 1: 0, 2: 0, 3: 0 };\nitems.forEach(i => { if (byClass[i.json.passenger_class] !== undefined) byClass[i.json.passenger_class]++; });\n\nreturn [{\n  json: {\n    summary: {\n      total_records: total,\n      survived: survived,\n      did_not_survive: total - survived,\n      survival_rate_pct: ((survived / total) * 100).toFixed(1),\n      average_age: avgAge.toFixed(1),\n      passengers_by_class: byClass,\n      generated_at: new Date().toISOString()\n    },\n    records: items.map(i => i.json)\n  }\n}];"
+      },
+      "id": "aggregate-node",
+      "name": "Aggregate & Summarize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "response-node",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1680, 300]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [[{ "node": "Fetch CSV from URL", "type": "main", "index": 0 }]]
+    },
+    "Webhook Trigger (Manual)": {
+      "main": [[{ "node": "Fetch CSV from URL", "type": "main", "index": 0 }]]
+    },
+    "Fetch CSV from URL": {
+      "main": [[{ "node": "Parse CSV", "type": "main", "index": 0 }]]
+    },
+    "Parse CSV": {
+      "main": [[{ "node": "Transform & Clean Data", "type": "main", "index": 0 }]]
+    },
+    "Transform & Clean Data": {
+      "main": [[{ "node": "Validate Records", "type": "main", "index": 0 }]]
+    },
+    "Validate Records": {
+      "main": [[{ "node": "Aggregate & Summarize", "type": "main", "index": 0 }]]
+    },
+    "Aggregate & Summarize": {
+      "main": [[{ "node": "Return Result", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": ["etl", "beginner", "csv", "data-pipeline"]
+}
