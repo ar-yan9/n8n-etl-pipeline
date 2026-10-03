@@ -74,7 +74,7 @@ n8n-etl-pipeline/
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/YOUR_USERNAME/n8n-etl-pipeline.git
+git clone https://github.com/ar-yan9/n8n-etl-pipeline.git
 cd n8n-etl-pipeline
 
 # 2. Start n8n
